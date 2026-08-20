@@ -13,8 +13,8 @@ The ratgdo32 must run the current [`ratgdo/homekit-ratgdo32`](https://github.com
 - `GET /status.json` returns authoritative state and diagnostics.
 - `GET /rest/events/subscribe` allocates a server-sent event stream.
 - The returned SSE stream provides immediate changes and heartbeats.
-- `POST /setgdo?garageDoorState=1` requests open.
-- `POST /setgdo?garageDoorState=0` requests close.
+- `POST /setgdo` with form field `garageDoorState=1` requests open.
+- `POST /setgdo` with form field `garageDoorState=0` requests close.
 
 These paths and payloads were verified against current firmware source at v3.5.2, not inferred from the older MQTT firmware.
 
@@ -56,7 +56,7 @@ This avoids falsely reporting a partially open door as fully open or closed whil
 2. Select the dry-contact protocol.
 3. Enable the rotary encoder if installed and reverse its direction if necessary.
 4. Assign the controller a DHCP reservation.
-5. Leave **Require Password** disabled. The firmware uses HTTP Digest Authentication for protected commands; Hubitat's event-stream and asynchronous HTTP interfaces do not provide a shared digest-auth session. Isolate the device on a trusted LAN or IoT VLAN instead.
+5. Enable **Require Password**, set a unique username/password, and enter the same credentials in the Hubitat device preferences. The driver implements the firmware's HTTP Digest challenge-response flow for commands. Status and SSE telemetry remain readable without authentication, so an IoT VLAN is still recommended.
 6. Confirm `http://<ratgdo-ip>/status.json` returns JSON from the same network.
 
 HomeKit pairing is optional and unrelated to Hubitat.
@@ -75,8 +75,9 @@ For manual installation, paste [ratgdo32-http.groovy](./ratgdo32-http.groovy) in
 
 1. Create a Hubitat virtual device using **ratgdo32 Direct HTTP Garage Door**.
 2. Enter the reserved ratgdo32 address and port 80.
-3. Save Preferences and run Initialize.
-4. Confirm `controllerStatus=online`, `streamStatus=connected`, and a valid door state before sending a command.
+3. Enter the firmware HTTP username and password. Password preferences are masked by Hubitat and never logged or copied into device state.
+4. Save Preferences and run Initialize.
+5. Confirm `controllerStatus=online`, `streamStatus=connected`, `authenticationRequired=yes`, `authenticationStatus=ready`, and a valid door state before sending a command.
 
 ## Command safety
 
@@ -87,6 +88,8 @@ For manual installation, paste [ratgdo32-http.groovy](./ratgdo32-http.groovy) in
 - Failed requests are never automatically retried.
 - Network/SSE reconnection never queues or replays a physical command.
 - HTTP acceptance never creates an optimistic final state; state comes from ratgdo32 feedback.
+- Digest nonces are acquired with a no-argument `/setgdo` probe that cannot actuate the door.
+- An expired nonce permits one authenticated resend only after an explicit HTTP 401 proves that the prior request was rejected before command processing.
 
 ## Encoder calibration
 
@@ -115,12 +118,12 @@ Perform motion tests while physically observing the door.
 9. **Hubitat reboot:** Verify reconstruction without a command.
 10. **Wi-Fi interruption:** Verify offline/reconnect without command replay.
 11. **Encoder:** Exercise both endpoints, partial stops, reversal, manual movement, and firmware calibration reset.
-12. **Authentication:** Enable Require Password temporarily and confirm commands are rejected clearly; disable it and reconnect.
+12. **Authentication:** Enable Require Password and verify `authenticationStatus=ready`, successful commands, rejection with a deliberately wrong password, and recovery after restoring the password.
 13. **Malformed response:** Confirm bad JSON/SSE logs a warning without false endpoint state.
 
 ## Known limitations
 
-- Firmware HTTP Digest Authentication is not supported. Use network isolation and leave Require Password disabled.
+- HTTP Digest authenticates commands but does not encrypt traffic. Status/SSE telemetry remains readable to clients that can reach the device; use network isolation as defense in depth.
 - Percentage is derived in Hubitat because current firmware exposes raw steps but not encoder endpoints or normalized position through HTTP.
 - SSE omits raw encoder steps, so `status.json` is polled while moving. Door and obstruction state remain event-driven.
 - The firmware HTTP API is not separately versioned as a formal public API. Regression-test firmware updates.

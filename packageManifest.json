@@ -6,7 +6,7 @@
   "dateReleased": "2026-08-20",
   "documentationLink": "https://github.com/babgvant/hubitat-ratgdo32/blob/main/README.md",
   "communityLink": "https://github.com/babgvant/hubitat-ratgdo32/issues",
-  "releaseNotes": "Initial beta release of the brokerless direct HTTP/SSE integration for current HomeKit-ratgdo32 firmware.",
+  "releaseNotes": "Initial beta release of the brokerless direct HTTP/SSE integration, including firmware-compatible HTTP Digest authentication for physical commands.",
   "drivers": [
     {
       "id": "4663b6f8-d7da-4bb5-bbf5-c86941c8683f",

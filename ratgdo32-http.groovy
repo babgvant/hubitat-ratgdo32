@@ -1,5 +1,6 @@
 /** Direct local HTTP/SSE driver for current ratgdo/homekit-ratgdo32 firmware. */
 import groovy.transform.Field
+import java.security.MessageDigest
 
 @Field static final String DRIVER_VERSION = "0.1.0"
 
@@ -23,11 +24,14 @@ metadata {
         attribute "firmwareVersion", "string"
         attribute "wifiSignal", "string"
         attribute "authenticationRequired", "enum", ["yes", "no", "unknown"]
+        attribute "authenticationStatus", "enum", ["disabled", "credentialsMissing", "challenging", "ready", "failed", "unknown"]
         attribute "driverVersion", "string"
     }
     preferences {
         input name: "ipAddress", type: "text", title: "ratgdo32 IP address or hostname", required: true
         input name: "httpPort", type: "number", title: "HTTP port", defaultValue: 80, range: "1..65535", required: true
+        input name: "httpUsername", type: "text", title: "ratgdo32 HTTP username", defaultValue: "admin", required: false
+        input name: "httpPassword", type: "password", title: "ratgdo32 HTTP password", required: false
         input name: "staleMinutes", type: "number", title: "Mark offline after no updates (minutes)", defaultValue: 5, range: "2..1440", required: true
         input name: "positionPollSeconds", type: "number", title: "Position polling while moving (seconds)", defaultValue: 2, range: "1..10", required: true
         input name: "infoLogging", type: "bool", title: "Enable informational logging", defaultValue: true
@@ -42,6 +46,7 @@ void updated() {
     logInfo "preferences updated"
     unschedule()
     closeEventStream()
+    clearDigestState()
     initializeAttributes()
     if (settings.debugLogging || settings.traceLogging) runIn(1800, "disableVerboseLogging", [overwrite: true])
     runIn(1, "initialize", [overwrite: true])
@@ -88,9 +93,37 @@ void statusCallback(response, Map data) {
 void commandCallback(response, Map data) {
     Integer status = response?.status as Integer
     if (status in [200, 204]) {
+        if (data?.authenticated) emit("authenticationStatus", "ready")
         logInfo "${data?.command ?: 'door'} command accepted by ratgdo32"
         runIn(1, "refresh", [overwrite: true])
+    } else if (status == 401) {
+        Map challenge = captureDigestChallenge(response)
+        if (challenge && data?.nonceRetry != true && credentialsConfigured()) {
+            logInfo "digest nonce rejected or refreshed; retrying authentication once"
+            sendDoorCommand(data.command.toString(), data.value.toString(), true, true)
+        } else {
+            emit("authenticationStatus", "failed")
+            log.error "${device.displayName}: command authentication failed; no physical command was accepted"
+        }
     } else handleHttpError("command", status)
+}
+
+void digestProbeCallback(response, Map data) {
+    state.digestProbePending = false
+    Integer status = response?.status as Integer
+    if (status == 401) {
+        if (!captureDigestChallenge(response)) {
+            emit("authenticationStatus", "failed")
+            log.error "${device.displayName}: unable to parse ratgdo32 Digest challenge"
+        }
+    } else if (status in [200, 204]) {
+        // A no-argument /setgdo request performs no action.
+        clearDigestState()
+        emit("authenticationRequired", "no")
+        emit("authenticationStatus", "disabled")
+    } else {
+        handleHttpError("authentication probe", status)
+    }
 }
 
 void subscriptionCallback(response, Map data) {
@@ -154,16 +187,37 @@ private void issueMovementCommand(String command) {
     String motion = device.currentValue("motion")?.toString()
     Boolean partialStopped = door == "unknown" && motion == "stopped" && asNumber(device.currentValue("rawEncoderPosition")) != null
     if (device.currentValue("controllerStatus") != "online") { log.warn "${device.displayName}: rejected ${command}; controller is offline"; return }
-    if (device.currentValue("authenticationRequired") != "no") { log.warn "${device.displayName}: rejected ${command}; firmware HTTP authentication state is not confirmed disabled"; return }
+    String authRequired = device.currentValue("authenticationRequired")?.toString()
+    if (authRequired == "yes" && device.currentValue("authenticationStatus") != "ready") {
+        log.warn "${device.displayName}: rejected ${command}; Digest authentication is not ready"
+        primeDigestAuthentication()
+        return
+    }
+    if (!(authRequired in ["yes", "no"])) { log.warn "${device.displayName}: rejected ${command}; authentication state is unknown"; return }
     if ((door == "unknown" && !partialStopped) || motion == "unknown") { log.warn "${device.displayName}: rejected ${command}; door state is unknown"; return }
     if (motion in ["opening", "closing"]) { log.warn "${device.displayName}: rejected ${command}; door is already moving (${motion})"; return }
     if ((command == "open" && door == "open") || (command == "close" && door == "closed")) { logInfo "ignored ${command}; already at endpoint"; return }
 
     String value = command == "open" ? "1" : "0"
-    Map params = [uri: baseUri(), path: "/setgdo", query: [garageDoorState: value],
-            requestContentType: "application/x-www-form-urlencoded", timeout: 10]
+    sendDoorCommand(command, value, authRequired == "yes", false)
+}
+
+private void sendDoorCommand(String command, String value, Boolean authenticated, Boolean nonceRetry) {
+    Map<String, String> headers = [:]
+    if (authenticated) {
+        String authorization = buildDigestAuthorization("POST", "/setgdo")
+        if (!authorization) {
+            emit("authenticationStatus", "failed")
+            log.error "${device.displayName}: could not build Digest authorization; command was not sent"
+            return
+        }
+        headers.Authorization = authorization
+    }
+    Map params = [uri: baseUri(), path: "/setgdo", body: "garageDoorState=${value}",
+            headers: headers, requestContentType: "application/x-www-form-urlencoded", timeout: 10]
     logDebug "HTTP POST /setgdo garageDoorState=${value}"
-    try { asynchttpPost("commandCallback", params, [command: command]) }
+    try { asynchttpPost("commandCallback", params,
+            [command: command, value: value, authenticated: authenticated, nonceRetry: nonceRetry]) }
     catch (Exception e) {
         log.error "${device.displayName}: ${command} request failed and was not retried: ${e.message}"
         markControllerOffline()
@@ -173,7 +227,17 @@ private void issueMovementCommand(String command) {
 private void handleStatus(Map update, Boolean fromEventStream) {
     if (!update) return
     noteSeen()
-    if (update.containsKey("passwordRequired")) emit("authenticationRequired", asBoolean(update.passwordRequired) ? "yes" : "no")
+    if (update.containsKey("passwordRequired")) {
+        Boolean required = asBoolean(update.passwordRequired)
+        emit("authenticationRequired", required ? "yes" : "no")
+        if (required) {
+            if (!credentialsConfigured()) emit("authenticationStatus", "credentialsMissing")
+            else if (!digestChallengeAvailable()) primeDigestAuthentication()
+        } else {
+            clearDigestState()
+            emit("authenticationStatus", "disabled")
+        }
+    }
     if (update.firmwareVersion != null) emit("firmwareVersion", update.firmwareVersion.toString())
     if (update.wifiRSSI != null) emit("wifiSignal", update.wifiRSSI.toString())
     if (update.containsKey("garageObstructed")) emit("obstruction", asBoolean(update.garageObstructed) ? "detected" : "clear")
@@ -233,10 +297,136 @@ private Boolean endpointsCalibrated() {
 
 private void schedulePositionPoll() { runIn(asInteger(settings.positionPollSeconds, 2), "pollPosition", [overwrite: true]) }
 
+/**
+ * Request a Digest challenge without supplying any setgdo arguments. The
+ * firmware loops over zero settings and performs no physical action if auth is
+ * disabled; when enabled it returns 401 before entering that loop.
+ */
+private void primeDigestAuthentication() {
+    if (!credentialsConfigured()) {
+        emit("authenticationStatus", "credentialsMissing")
+        return
+    }
+    if (state.digestProbePending) return
+    state.digestProbePending = true
+    emit("authenticationStatus", "challenging")
+    Map params = [uri: baseUri(), path: "/setgdo", body: "",
+            requestContentType: "application/x-www-form-urlencoded", timeout: 8]
+    logDebug "requesting Digest authentication challenge"
+    try { asynchttpPost("digestProbeCallback", params) }
+    catch (Exception e) {
+        state.digestProbePending = false
+        emit("authenticationStatus", "failed")
+        communicationFailure("Digest challenge request failed", e)
+    }
+}
+
+private Map captureDigestChallenge(response) {
+    String header = responseHeader(response, "WWW-Authenticate")
+    if (!header?.toLowerCase()?.startsWith("digest ")) return null
+    Map<String, String> challenge = parseDigestChallenge(header.substring(7))
+    if (!challenge.realm || !challenge.nonce) return null
+
+    String algorithm = (challenge.algorithm ?: "MD5").toUpperCase()
+    if (!(algorithm in ["MD5", "MD5-SESS"])) {
+        log.error "${device.displayName}: unsupported Digest algorithm '${algorithm}'"
+        return null
+    }
+    String qop = selectDigestQop(challenge.qop)
+    if (challenge.qop && !qop) {
+        log.error "${device.displayName}: Digest challenge does not offer qop=auth"
+        return null
+    }
+    challenge.algorithm = algorithm
+    challenge.qop = qop
+    state.digestChallenge = challenge
+    state.digestNonceCount = 0
+    state.digestProbePending = false
+    emit("authenticationRequired", "yes")
+    emit("authenticationStatus", "ready")
+    logInfo "Digest authentication challenge accepted"
+    return challenge
+}
+
+private String buildDigestAuthorization(String method, String requestUri) {
+    Map challenge = state.digestChallenge as Map
+    String username = settings.httpUsername?.toString()
+    String password = settings.httpPassword?.toString()
+    if (!challenge?.realm || !challenge?.nonce || !username || password == null) return null
+
+    Integer count = ((state.digestNonceCount ?: 0) as Integer) + 1
+    state.digestNonceCount = count
+    String nc = String.format("%08x", count)
+    String cnonce = UUID.randomUUID().toString().replace("-", "")
+    String ha1 = md5Hex("${username}:${challenge.realm}:${password}")
+    if (challenge.algorithm == "MD5-SESS") ha1 = md5Hex("${ha1}:${challenge.nonce}:${cnonce}")
+    String ha2 = md5Hex("${method}:${requestUri}")
+    String responseHash = challenge.qop ?
+            md5Hex("${ha1}:${challenge.nonce}:${nc}:${cnonce}:${challenge.qop}:${ha2}") :
+            md5Hex("${ha1}:${challenge.nonce}:${ha2}")
+
+    List<String> parts = [
+            "username=\"${escapeDigest(username)}\"",
+            "realm=\"${escapeDigest(challenge.realm.toString())}\"",
+            "nonce=\"${escapeDigest(challenge.nonce.toString())}\"",
+            "uri=\"${escapeDigest(requestUri)}\"",
+            "response=\"${responseHash}\"",
+            "algorithm=${challenge.algorithm}"
+    ]
+    if (challenge.opaque) parts << "opaque=\"${escapeDigest(challenge.opaque.toString())}\""
+    if (challenge.qop) {
+        parts << "qop=${challenge.qop}"
+        parts << "nc=${nc}"
+        parts << "cnonce=\"${cnonce}\""
+    }
+    "Digest ${parts.join(', ')}"
+}
+
+private static Map<String, String> parseDigestChallenge(String value) {
+    Map<String, String> result = [:]
+    def matcher = value =~ /([A-Za-z0-9_-]+)\s*=\s*(?:"([^"]*)"|([^,\s]+))/
+    matcher.each { match -> result[match[1].toString().toLowerCase()] = (match[2] ?: match[3])?.toString() }
+    result
+}
+
+private static String selectDigestQop(Object offered) {
+    if (!offered) return null
+    offered.toString().split(',').collect { it.trim().toLowerCase() }.find { it == "auth" }
+}
+
+private static String responseHeader(response, String wantedName) {
+    Map headers = response?.headers as Map
+    def entry = headers?.find { key, ignored -> key?.toString()?.equalsIgnoreCase(wantedName) }
+    Object value = entry?.value
+    if (value instanceof Collection) value = value ? value.first() : null
+    value?.toString()
+}
+
+private static String md5Hex(String value) {
+    MessageDigest.getInstance("MD5").digest(value.getBytes("UTF-8")).encodeHex().toString()
+}
+
+private static String escapeDigest(String value) { value.replace("\\", "\\\\").replace("\"", "\\\"") }
+
+private Boolean credentialsConfigured() {
+    settings.httpUsername?.toString()?.trim() && settings.httpPassword != null && settings.httpPassword.toString().length() > 0
+}
+
+private Boolean digestChallengeAvailable() {
+    Map challenge = state.digestChallenge as Map
+    challenge?.realm && challenge?.nonce
+}
+
+private void clearDigestState() {
+    state.remove("digestChallenge")
+    state.remove("digestNonceCount")
+    state.remove("digestProbePending")
+}
+
 private void handleHttpError(String operation, Integer status) {
     if (status in [401, 403]) {
         emit("authenticationRequired", "yes")
-        log.error "${device.displayName}: ${operation} rejected with HTTP ${status}; disable Require Password in ratgdo32 firmware"
+        log.error "${device.displayName}: ${operation} rejected with HTTP ${status}; verify the configured Digest credentials"
     } else { log.warn "${device.displayName}: ${operation} returned HTTP ${status ?: 'unknown'}"; markControllerOffline() }
 }
 
@@ -283,6 +473,7 @@ private void initializeAttributes() {
     if (device.currentValue("streamStatus") == null) emit("streamStatus", "disconnected")
     if (device.currentValue("encoderStatus") == null) emit("encoderStatus", "unknown")
     if (device.currentValue("authenticationRequired") == null) emit("authenticationRequired", "unknown")
+    if (device.currentValue("authenticationStatus") == null) emit("authenticationStatus", "unknown")
 }
 
 void disableVerboseLogging() {
