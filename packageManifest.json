@@ -1,18 +1,18 @@
 {
-  "packageName": "ratgdo32 ESPHome MQTT Garage Door",
+  "packageName": "ratgdo32 Direct HTTP Garage Door",
   "author": "Andrew Van Til",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "minimumHEVersion": "2.3.6",
   "dateReleased": "2026-08-20",
   "documentationLink": "https://github.com/babgvant/hubitat-ratgdo32/blob/main/README.md",
   "communityLink": "https://github.com/babgvant/hubitat-ratgdo32/issues",
-  "releaseNotes": "Initial release for current ratgdo32 ESPHome dry-contact and encoder firmware using local MQTT.",
+  "releaseNotes": "Brokerless direct HTTP/SSE integration for current HomeKit-ratgdo32 firmware. Replaces the MQTT/ESPHome architecture.",
   "drivers": [
     {
       "id": "4663b6f8-d7da-4bb5-bbf5-c86941c8683f",
-      "name": "ratgdo32 ESPHome MQTT Garage Door",
+      "name": "ratgdo32 Direct HTTP Garage Door",
       "namespace": "babgvant",
-      "location": "https://raw.githubusercontent.com/babgvant/hubitat-ratgdo32/main/ratgdo32-esphome-mqtt.groovy",
+      "location": "https://raw.githubusercontent.com/babgvant/hubitat-ratgdo32/main/ratgdo32-http.groovy",
       "required": true
     }
   ]

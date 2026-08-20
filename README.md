@@ -1,109 +1,150 @@
-# Hubitat ratgdo32 ESPHome MQTT driver
+# Hubitat ratgdo32 direct HTTP driver
 
-This project provides a self-contained Hubitat Elevation driver for a current ratgdo32 running the maintained ESPHome firmware in dry-contact + encoder mode. Communication is local through an MQTT broker. No Home Assistant, Node-RED, HomeKit, or cloud service is involved.
+This package connects Hubitat Elevation directly to a ratgdo32 over the local network. It requires no MQTT broker, Home Assistant, Node-RED, Homebridge, or cloud service.
 
-## Research result and architecture
+## Architecture
 
-The important upstream distinction is hardware/firmware generation:
+```text
+Hubitat ── local HTTP + SSE ──> ratgdo32 ── dry contact ──> Genie D7155L
+```
 
-- [`mqtt-ratgdo`](https://github.com/ratgdo/mqtt-ratgdo) v2.59 (last release October 2024) implements `ratgdo/<device>/status/...` and `command/...`, but its build targets the older ratgdo/ESP8266 board line. It is not the maintained firmware for ratgdo32.
-- Current ratgdo32 support lives in [`esphome-ratgdo`](https://github.com/ratgdo/esphome-ratgdo). Its current board matrix includes v3.2 dry-contact builds, and [`base_drycontact_enc.yaml`](https://github.com/ratgdo/esphome-ratgdo/blob/main/base_drycontact_enc.yaml) exposes Door, Obstruction, Encoder, Encoder Reverse, and Encoder Calibration Reset entities.
-- The stock ratgdo32 image enables ESPHome's native API, not MQTT. MQTT is supported by ESPHome, but requires compiling a small overlay such as [ratgdo32-mqtt-overlay.yaml](./ratgdo32-mqtt-overlay.yaml). This is the unavoidable architectural limitation for a direct MQTT design on current hardware.
-- A standalone Hubitat driver is appropriate: Hubitat's driver MQTT interface owns a broker connection and provides `connect`, `subscribe`, `publish`, `parseMessage`, `isConnected`, and status callbacks. An app/child-driver design helps only when sharing one connection among multiple doors; it adds no value for one controller.
-- Hubitat's newer MQTT Import Integration is beta and maps generic entities. The custom driver remains useful because it applies conservative physical-command policy and preserves a stationary partial door as `door=unknown`, `motion=stopped`, and a numeric position.
+The ratgdo32 must run the current [`ratgdo/homekit-ratgdo32`](https://github.com/ratgdo/homekit-ratgdo32) firmware. Despite its name, Apple Home and HomeKit pairing are not required. The firmware also provides a local HTTP interface:
 
-The encoder implementation persists its last count and calibrated endpoints, derives a 0.0–1.0 cover position, declares travel stopped after a pulse watchdog, and detects a position contradiction after power loss by clearing calibration. Calibration endpoints are learned at the fully closed/open boundaries and retained in ESP32 preferences. Current source exposes raw encoder steps as a diagnostic sensor and normalized position through the Door cover.
+- `GET /status.json` returns authoritative state and diagnostics.
+- `GET /rest/events/subscribe` allocates a server-sent event stream.
+- The returned SSE stream provides immediate changes and heartbeats.
+- `POST /setgdo?garageDoorState=1` requests open.
+- `POST /setgdo?garageDoorState=0` requests close.
 
-The ratgdo cover advertises position, stop, and toggle support. The driver sends only explicit `OPEN` and `CLOSE`; it never sends toggle. In dry-contact mode, ratgdo uses its sensed position/direction and opener relay behavior to synthesize those operations. This still depends on valid encoder calibration (or both limit switches in non-encoder mode).
+These paths and payloads were verified against current firmware source at v3.5.2, not inferred from the older MQTT firmware.
 
-Light control is intentionally absent: the current dry-contact base does not expose a light entity. Obstruction is exposed by ratgdo, but whether it produces useful data on a Genie installation depends on wiring/electrical compatibility and must be tested on the actual opener.
+## Current firmware behavior
 
-## MQTT contract
+The firmware supports ratgdo32 hardware, dry-contact openers, the optional rotary encoder, obstruction reporting, and locally generated open/close state. In encoder mode it reports `Open`, `Closed`, `Opening`, `Closing`, `Stopped`, or `Unknown` through HTTP.
 
-With `topic_prefix: ratgdo32-garage` and the upstream entity names:
+`status.json` exposes raw encoder steps but not normalized position or the firmware's learned endpoints. The driver learns raw closed/open endpoints whenever authoritative endpoint states are observed, persists them in Hubitat state, and derives 0–100%. While moving, it polls `status.json` at a configurable low rate because live SSE messages do not include `encSteps`.
 
-| Topic | Payload | Direction | Purpose |
-|---|---|---:|---|
-| `ratgdo32-garage/status` | `online`, `offline` | ratgdo → Hubitat | Retained birth/LWT/shutdown availability |
-| `ratgdo32-garage/cover/door/state` | `open`, `closed`, `opening`, `closing`, `unknown` | ratgdo → Hubitat | ESPHome cover operation/state |
-| `ratgdo32-garage/cover/door/position/state` | integer `0`–`100` | ratgdo → Hubitat | Normalized position; 0 closed, 100 open |
-| `ratgdo32-garage/cover/door/command` | `OPEN`, `CLOSE` | Hubitat → ratgdo | Explicit endpoint command |
-| `ratgdo32-garage/binary_sensor/obstruction/state` | `ON`, `OFF` | ratgdo → Hubitat | Obstruction problem sensor |
-| `ratgdo32-garage/sensor/encoder/state` | signed step count | ratgdo → Hubitat | Raw diagnostic encoder count |
+## Hubitat model
 
-ESPHome entity object IDs are derived from entity names. Confirm the final topics in the ESPHome boot log or an MQTT explorer after flashing; all three object IDs are preferences in the driver.
+Standard capabilities:
 
-### Difference from the 2023–2024 community driver
+- `GarageDoorControl`
+- `ContactSensor`
+- `Refresh`
+- `Configuration`
+- `Initialize`
+- `HealthCheck`
 
-The [existing community driver](https://github.com/edasque/hubitat/blob/main/devicehandlers/ratgdoMQTT/ratgdoMQTT.groovy) targets legacy `mqtt-ratgdo` topics (`ratgdo/<device>/status/door`, `/status/light`, `/status/lock`, `/status/availability`, `/status/obstruction`) and publishes commands under `/command/...`. It also issues a legacy `query`, advertises light and lock capabilities, and reconnects in a blocking loop. Those assumptions do not match current ratgdo32 ESPHome firmware.
+Custom attributes include position, movement, obstruction, controller/stream status, last seen, raw encoder position, encoder calibration status, firmware version, Wi-Fi signal, and authentication status.
 
-This driver instead uses standard ESPHome entity topics, consumes a separate position topic, omits unavailable dry-contact light/lock features, reconnects with scheduled exponential backoff, and never retries or queues a door-motion publish. ESPHome's MQTT cover source reports every idle intermediate position as `open`; this driver corrects that semantic loss by combining it with position and publishing Hubitat `door=unknown`, `motion=stopped` for a partial stationary door.
+A stationary partial door is represented as:
 
-## Installation and configuration
+```text
+door: unknown
+motion: stopped
+contact: open
+position: 1–99
+```
 
-1. Build and flash current ratgdo32 dry-contact encoder firmware using [ratgdo32-mqtt-overlay.yaml](./ratgdo32-mqtt-overlay.yaml). Select another current upstream board package if the controller is not v3.2.
-2. Put the broker on the same trusted LAN/VLAN, require authentication, and do not expose port 1883 to the internet. Give ratgdo and Hubitat a broker account restricted to this topic tree when practical.
-3. Confirm retained `status`, cover state/position, obstruction, and encoder messages with an MQTT client.
-4. Install the driver with Hubitat Package Manager using this manifest URL:
+This avoids falsely reporting a partially open door as fully open or closed while remaining inside Hubitat's standard `GarageDoorControl` values.
 
-   `https://raw.githubusercontent.com/babgvant/hubitat-ratgdo32/main/packageManifest.json`
+## Installation
 
-   Alternatively, open **Drivers Code**, choose **New Driver**, paste [ratgdo32-esphome-mqtt.groovy](./ratgdo32-esphome-mqtt.groovy), and save.
-5. Add a virtual device using **ratgdo32 ESPHome MQTT Garage Door**. Enter broker settings and the exact `topic_prefix`. Defaults assume entity names Door, Obstruction, and Encoder.
-6. Save Preferences, then run Initialize. Verify `controllerStatus=online`, position, and door state before testing commands while physically observing the door.
+### 1. Flash and configure ratgdo32
 
-Recommended firmware settings are `discovery: false` (avoids unused Home Assistant discovery traffic), retained availability and state, a fixed node/topic prefix, and a fixed DHCP lease. TLS is supported by the Hubitat preference but requires a broker certificate trusted by the hub; plain MQTT on a tightly controlled local network is simpler.
+1. Flash current HomeKit-ratgdo32 firmware using the project's [browser installer](https://ratgdo.github.io/homekit-ratgdo32/).
+2. Select the dry-contact protocol.
+3. Enable the rotary encoder if installed and reverse its direction if necessary.
+4. Assign the controller a DHCP reservation.
+5. Leave **Require Password** disabled. The firmware uses HTTP Digest Authentication for protected commands; Hubitat's event-stream and asynchronous HTTP interfaces do not provide a shared digest-auth session. Isolate the device on a trusted LAN or IoT VLAN instead.
+6. Confirm `http://<ratgdo-ip>/status.json` returns JSON from the same network.
 
-## Safety and reliability behavior
+HomeKit pairing is optional and unrelated to Hubitat.
 
-- Open/close is rejected while offline, unknown, or already moving.
-- An endpoint command is suppressed when already at that endpoint.
-- A command publish is performed once. Failure reconnects MQTT but never replays the physical command.
-- Reconnection only resubscribes; it cannot replay a stale command.
-- Final state always comes from ratgdo feedback. No optimistic final or motion event is emitted.
-- Retained messages rebuild state after either device reboots. Malformed/unknown messages are logged and ignored or mapped to unknown.
-- `ContactSensor` is closed only at fully closed; every other state is open.
+### 2. Install through Hubitat Package Manager
+
+Use this manifest URL:
+
+```text
+https://raw.githubusercontent.com/babgvant/hubitat-ratgdo32/main/packageManifest.json
+```
+
+For manual installation, paste [ratgdo32-http.groovy](./ratgdo32-http.groovy) into **Drivers Code**.
+
+### 3. Create the device
+
+1. Create a Hubitat virtual device using **ratgdo32 Direct HTTP Garage Door**.
+2. Enter the reserved ratgdo32 address and port 80.
+3. Save Preferences and run Initialize.
+4. Confirm `controllerStatus=online`, `streamStatus=connected`, and a valid door state before sending a command.
+
+## Command safety
+
+- Commands are rejected when the controller or state is unknown, while moving, or when firmware authentication is enabled.
+- Commands already satisfied at an endpoint are suppressed.
+- Only explicit open and close requests are sent; the driver never sends toggle.
+- Each user request creates exactly one HTTP request.
+- Failed requests are never automatically retried.
+- Network/SSE reconnection never queues or replays a physical command.
+- HTTP acceptance never creates an optimistic final state; state comes from ratgdo32 feedback.
+
+## Encoder calibration
+
+The firmware calibrates its encoder after complete travel to both endpoints. The driver separately learns the raw step reported at each authoritative endpoint so it can calculate percentage.
+
+After installation or firmware encoder reset:
+
+1. Move fully closed and allow the door to stop.
+2. Move fully open and allow it to stop.
+3. Verify `encoderStatus=calibrated` and position changes in the correct direction.
+
+If the encoder direction changes, repeat both endpoint cycles. Newly observed endpoint values replace the prior values.
 
 ## Test plan
 
-Perform physical-motion tests with the door in view and the normal safety sensors working.
+Perform motion tests while physically observing the door.
 
-1. **Initial connection:** start broker and ratgdo, initialize the driver, and verify online, lastSeen, closed/open endpoint, position, obstruction clear, and raw encoder count.
-2. **Open from closed:** invoke Open once; verify actual `opening`, changing position, then `open`/100. Invoke Open again and verify no MQTT command.
-3. **Close from open:** invoke Close once; verify `closing`, changing position, then `closed`/0. Invoke Close again and verify no MQTT command.
-4. **Partial opening / stop:** stop with the physical control partway. Verify position 1–99, `motion=stopped`, `door=unknown`, and `contact=open`. Then test explicit Open and Close separately.
-5. **Obstruction:** interrupt the beam and confirm `detected`; clear it and confirm `clear`. Attempt the opener's normal close and confirm its native reversal/safety behavior.
-6. **Manual operation:** use wall button/remotes through complete and partial cycles and verify identical feedback without Hubitat commands.
-7. **Broker restart:** restart broker while idle. Verify offline then scheduled reconnect/online and state reconstruction. Confirm no door command appears.
-8. **ratgdo reboot:** reboot it while idle. Verify LWT/shutdown offline, birth online, restored position/calibration, and no movement.
-9. **Hubitat reboot:** reboot hub, verify reconnect and retained state reconstruction, and verify no command publication.
-10. **Encoder:** calibrate by reaching both endpoints, verify monotonic 0–100 travel and direction, reverse the option if necessary, manually move while unpowered if mechanically possible, then verify calibration invalidation/relearning behavior.
-11. **Wi-Fi loss/recovery:** disconnect ratgdo Wi-Fi, wait for offline/stale detection, restore it, and verify state reconstruction without command replay.
-12. **Bad input:** publish malformed position, obstruction, and state payloads and confirm warnings without a false endpoint event.
+1. **Initial connection:** Initialize and verify HTTP status, connected SSE, endpoint state, obstruction, firmware, and Wi-Fi values.
+2. **Open from closed:** Send Open once; verify `opening`, changing percentage, then `open`/100. A second Open must send nothing.
+3. **Close from open:** Send Close once; verify `closing`, changing percentage, then `closed`/0. A second Close must send nothing.
+4. **Partial stop:** Stop with the wall control. Verify `unknown`/`stopped`, open contact, and position 1–99.
+5. **Resume from partial:** Test explicit Open and Close separately and verify direction.
+6. **Obstruction:** Trigger and clear the beam and verify detected/clear. Confirm native close reversal.
+7. **Manual operation:** Use wall controls/remotes and verify immediate SSE feedback.
+8. **ratgdo reboot:** Verify disconnect/reconnect, refresh, and no door command.
+9. **Hubitat reboot:** Verify reconstruction without a command.
+10. **Wi-Fi interruption:** Verify offline/reconnect without command replay.
+11. **Encoder:** Exercise both endpoints, partial stops, reversal, manual movement, and firmware calibration reset.
+12. **Authentication:** Enable Require Password temporarily and confirm commands are rejected clearly; disable it and reconnect.
+13. **Malformed response:** Confirm bad JSON/SSE logs a warning without false endpoint state.
 
 ## Known limitations
 
-- Current stock ratgdo32 firmware does not enable MQTT; a locally compiled ESPHome overlay is required.
-- Hubitat `GarageDoorControl.door` has no `stopped`/partial value. The driver uses standard `unknown` plus custom `motion=stopped` and `position`.
-- ESPHome reports an idle partial position as cover state `open`; correct classification requires the retained position message. Before position arrives, the driver remains conservative (`unknown`).
-- Hubitat's MQTT client is one connection per device. Multiple garage doors create multiple broker sessions; an app/child architecture may be preferable at larger scale.
-- MQTT QoS 0 does not acknowledge application handling. The driver deliberately does not retry physical movement commands.
-- Encoder calibration status is not exposed as a dedicated upstream entity. Loss is inferred from unknown/invalid cover state and must be confirmed in device logs or by endpoint calibration.
-- Obstruction feedback on the Genie D7155L dry-contact installation was not verified on physical hardware. Light control is unavailable in this upstream dry-contact profile.
+- Firmware HTTP Digest Authentication is not supported. Use network isolation and leave Require Password disabled.
+- Percentage is derived in Hubitat because current firmware exposes raw steps but not encoder endpoints or normalized position through HTTP.
+- SSE omits raw encoder steps, so `status.json` is polled while moving. Door and obstruction state remain event-driven.
+- The firmware HTTP API is not separately versioned as a formal public API. Regression-test firmware updates.
+- Dry-contact mode does not provide Genie opener light control. The driver does not expose a misleading Switch capability.
+- Obstruction behavior has not been tested on this physical D7155L installation.
 
-## Could not be verified
+## Verified upstream fields
 
-- Real-device topic strings for a compiled v3.2 image were derived from current ESPHome topic-generation rules and current ratgdo entity names, but were not captured from the user's controller. Confirm them from its boot log/MQTT broker.
-- Physical behavior of the Genie Signature Series D7155L, obstruction wiring, relay pulse response, and encoder direction/calibration could not be bench-tested here.
-- Hubitat does not publish a machine-readable capability schema/version. Capability names and values were checked against its current Driver Capability List; final compilation and runtime MQTT behavior must be verified on an actual hub.
+| HTTP JSON field | Type | Driver use |
+|---|---|---|
+| `garageDoorState` | string | Door and motion state |
+| `garageObstructed` | boolean | Obstruction state |
+| `encSteps` | integer | Raw and derived position |
+| `encoderEnabled` | boolean | Encoder status |
+| `encoderReversed` | boolean | Diagnostic context |
+| `firmwareVersion` | string | Firmware diagnostic |
+| `wifiRSSI` | string | Wi-Fi diagnostic |
+| `passwordRequired` | boolean | Prevent unsupported protected commands |
+| `upTime` | integer | SSE heartbeat/freshness |
 
-## Primary references
+## References
 
-- [Current esphome-ratgdo repository](https://github.com/ratgdo/esphome-ratgdo)
-- [Current ratgdo cover implementation](https://github.com/ratgdo/esphome-ratgdo/blob/main/components/ratgdo/cover/ratgdo_cover.cpp)
-- [ESPHome MQTT cover implementation](https://api-docs.esphome.io/mqtt__cover_8cpp_source)
-- [ESPHome MQTT availability behavior](https://esphome.io/components/mqtt/)
-- [Hubitat MQTT Interface](https://docs2.hubitat.com/en/developer/interfaces/mqtt-interface)
-- [Hubitat Driver Capability List](https://docs2.hubitat.com/en/developer/driver/capability-list)
-- [Community ratgdo MQTT thread](https://community.hubitat.com/t/beta-ratgdo-driver-w-mqtt-firmware/129078)
-- [Legacy mqtt-ratgdo repository](https://github.com/ratgdo/mqtt-ratgdo)
+- [Current HomeKit-ratgdo32 firmware](https://github.com/ratgdo/homekit-ratgdo32)
+- [Firmware web API source](https://github.com/ratgdo/homekit-ratgdo32/blob/main/src/web.cpp)
+- [Firmware encoder source](https://github.com/ratgdo/homekit-ratgdo32/blob/main/src/encoder.cpp)
+- [Prior-art Hubitat HTTP driver](https://github.com/mitchjs/Hubitat/blob/main/Drivers/MJS-Gadgets-Http-RatGDO.groovy)
+- [Hubitat direct-integration discussion](https://community.hubitat.com/t/ratgdo-direct-integration/162207)
