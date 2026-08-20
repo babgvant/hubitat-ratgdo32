@@ -1,7 +1,7 @@
 /** Direct local HTTP/SSE driver for current ratgdo/homekit-ratgdo32 firmware. */
 import groovy.transform.Field
 
-@Field static final String DRIVER_VERSION = "2.0.0"
+@Field static final String DRIVER_VERSION = "0.1.0"
 
 metadata {
     definition(name: "ratgdo32 Direct HTTP Garage Door", namespace: "babgvant", author: "Andrew Van Til",
