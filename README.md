@@ -81,6 +81,8 @@ HPM installs both the **ratgdo32 Garage Door** app and the required **ratgdo32 D
 
 Add another instance of the app for each additional ratgdo32. Existing manually created devices can continue using the driver; the app creates its own device.
 
+If an app-created device has no current states or its **Preferences** tab has a blank ratgdo32 address, update this package in HPM, open the **ratgdo32 Garage Door** app instance, and select **Done**. This writes the connection settings to the existing device. Then run **Initialize** on the device and check its Current States and Logs.
+
 ## Command safety
 
 - Commands are rejected when the controller or state is unknown, while moving, or when firmware authentication is enabled.

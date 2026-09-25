@@ -1,12 +1,12 @@
 {
   "packageName": "ratgdo32 Direct HTTP Garage Door",
   "author": "Andrew Van Til",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "minimumHEVersion": "2.3.6",
   "dateReleased": "2026-09-25",
   "documentationLink": "https://github.com/babgvant/hubitat-ratgdo32/blob/main/README.md",
   "communityLink": "https://github.com/babgvant/hubitat-ratgdo32/issues",
-  "releaseNotes": "Adds a guided Hubitat app that creates and configures the garage door device after HPM installation.",
+  "releaseNotes": "Fixes app-created device settings so the controller address is saved and door state can load; initializes diagnostic states on every connection attempt.",
   "apps": [
     {
       "id": "1b847899-bcea-48fc-8f79-187146b963b9",

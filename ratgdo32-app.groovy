@@ -69,10 +69,10 @@ private void syncDevice() {
 
     String label = settings.controllerName?.toString()?.trim() ?: "Garage Door"
     if (child.label != label) child.setLabel(label)
-    child.updateSetting("ipAddress", [value: host, type: "text"])
+    child.updateSetting("ipAddress", [value: host, type: "string"])
     child.updateSetting("httpPort", [value: (settings.httpPort ?: 80).toString(), type: "number"])
-    child.updateSetting("httpUsername", [value: settings.httpUsername?.toString() ?: "", type: "text"])
-    child.updateSetting("httpPassword", [value: settings.httpPassword?.toString() ?: "", type: "password"])
+    child.updateSetting("httpUsername", [value: settings.httpUsername?.toString() ?: "", type: "string"])
+    child.updateSetting("httpPassword", [value: settings.httpPassword?.toString() ?: "", type: "string"])
     child.initialize()
 }
 
