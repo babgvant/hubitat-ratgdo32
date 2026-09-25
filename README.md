@@ -63,21 +63,23 @@ HomeKit pairing is optional and unrelated to Hubitat.
 
 ### 2. Install through Hubitat Package Manager
 
-Use this manifest URL:
+In **Apps → Hubitat Package Manager → Install → From a URL**, paste this manifest URL:
 
 ```text
 https://raw.githubusercontent.com/babgvant/hubitat-ratgdo32/main/packageManifest.json
 ```
 
-For manual installation, paste [ratgdo32-http.groovy](./ratgdo32-http.groovy) into **Drivers Code**.
+HPM installs both the **ratgdo32 Garage Door** app and the required **ratgdo32 Direct HTTP Garage Door** driver. For manual installation, add [ratgdo32-app.groovy](./ratgdo32-app.groovy) under **Apps Code** and [ratgdo32-http.groovy](./ratgdo32-http.groovy) under **Drivers Code**.
 
-### 3. Create the device
+### 3. Add your garage door
 
-1. Create a Hubitat virtual device using **ratgdo32 Direct HTTP Garage Door**.
-2. Enter the reserved ratgdo32 address and port 80.
-3. Enter the firmware HTTP username and password. Password preferences are masked by Hubitat and never logged or copied into device state.
-4. Save Preferences and run Initialize.
-5. Confirm `controllerStatus=online`, `streamStatus=connected`, `authenticationRequired=yes`, `authenticationStatus=ready`, and a valid door state before sending a command.
+1. In Hubitat **Apps**, select **Add User App → ratgdo32 Garage Door**.
+2. Give the door a name and enter the reserved ratgdo32 IP address or hostname. Enter the address only, without `http://` or a path. Port 80 is the default.
+3. If firmware **Require Password** is enabled, enter its HTTP username and password. The password fields are masked in Hubitat.
+4. Select **Done**. The app creates and configures the garage door device automatically. Open the app again to change its settings.
+5. On the device page, confirm `controllerStatus=online`, `streamStatus=connected`, and a valid door state before sending a command. With firmware authentication enabled, also confirm `authenticationRequired=yes` and `authenticationStatus=ready`.
+
+Add another instance of the app for each additional ratgdo32. Existing manually created devices can continue using the driver; the app creates its own device.
 
 ## Command safety
 

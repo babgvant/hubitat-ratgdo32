@@ -1,12 +1,23 @@
 {
   "packageName": "ratgdo32 Direct HTTP Garage Door",
   "author": "Andrew Van Til",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "minimumHEVersion": "2.3.6",
-  "dateReleased": "2026-08-20",
+  "dateReleased": "2026-09-25",
   "documentationLink": "https://github.com/babgvant/hubitat-ratgdo32/blob/main/README.md",
   "communityLink": "https://github.com/babgvant/hubitat-ratgdo32/issues",
-  "releaseNotes": "Initial beta release of the brokerless direct HTTP/SSE integration, including firmware-compatible HTTP Digest authentication for physical commands.",
+  "releaseNotes": "Adds a guided Hubitat app that creates and configures the garage door device after HPM installation.",
+  "apps": [
+    {
+      "id": "1b847899-bcea-48fc-8f79-187146b963b9",
+      "name": "ratgdo32 Garage Door",
+      "namespace": "babgvant",
+      "location": "https://raw.githubusercontent.com/babgvant/hubitat-ratgdo32/main/ratgdo32-app.groovy",
+      "required": true,
+      "category": "Convenience",
+      "description": "Guided setup that creates and configures a local ratgdo32 garage door device."
+    }
+  ],
   "drivers": [
     {
       "id": "4663b6f8-d7da-4bb5-bbf5-c86941c8683f",
