@@ -6,7 +6,7 @@ definition(
     description: "Create and configure a local ratgdo32 garage-door device.",
     category: "Convenience",
     documentationLink: "https://github.com/babgvant/hubitat-ratgdo32/blob/main/README.md",
-    importUrl: "https://raw.githubusercontent.com/babgvant/hubitat-ratgdo32/main/ratgdo32-app.groovy",
+    importUrl: "https://raw.githubusercontent.com/babgvant/hubitat-ratgdo32/main/apps/ratgdo32-Garage-Door-App.groovy",
     iconUrl: "",
     iconX2Url: "",
     singleInstance: false
@@ -16,7 +16,7 @@ preferences {
     page(name: "setupPage")
 }
 
-Map setupPage() {
+def setupPage() {
     dynamicPage(name: "setupPage", title: "ratgdo32 Garage Door", install: true, uninstall: true) {
         section("Connect to your ratgdo32") {
             paragraph "Use the local address of a ratgdo32 running homekit-ratgdo32 firmware. Give it a DHCP reservation so the address stays the same."
@@ -42,8 +42,9 @@ Map setupPage() {
     }
 }
 
-void installed() { syncDevice() }
-void updated() { syncDevice() }
+def installed() { syncDevice() }
+
+def updated() { syncDevice() }
 
 private void syncDevice() {
     state.remove("setupError")
@@ -59,7 +60,7 @@ private void syncDevice() {
     if (!child) {
         try {
             child = addChildDevice("babgvant", "ratgdo32 Direct HTTP Garage Door", dni,
-                    [label: settings.controllerName?.toString()?.trim() ?: "Garage Door", isComponent: false])
+                    [label: settings.controllerName?.toString()?.trim() ?: "Garage Door", isComponent: true])
         } catch (Exception e) {
             state.setupError = "Could not create the device. Check that the ratgdo32 driver was installed with this app."
             log.error "${app.label}: ${state.setupError} ${e.message}"
@@ -69,11 +70,8 @@ private void syncDevice() {
 
     String label = settings.controllerName?.toString()?.trim() ?: "Garage Door"
     if (child.label != label) child.setLabel(label)
-    child.updateSetting("ipAddress", [value: host, type: "string"])
-    child.updateSetting("httpPort", [value: (settings.httpPort ?: 80).toString(), type: "number"])
-    child.updateSetting("httpUsername", [value: settings.httpUsername?.toString() ?: "", type: "string"])
-    child.updateSetting("httpPassword", [value: settings.httpPassword?.toString() ?: "", type: "string"])
-    child.initialize()
+    child.applyConnection(host, (settings.httpPort ?: 80) as Integer,
+            settings.httpUsername?.toString() ?: "", settings.httpPassword?.toString() ?: "")
 }
 
 private String deviceNetworkId() { "ratgdo32-${app.id}" }

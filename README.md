@@ -69,7 +69,7 @@ In **Apps → Hubitat Package Manager → Install → From a URL**, paste this m
 https://raw.githubusercontent.com/babgvant/hubitat-ratgdo32/main/packageManifest.json
 ```
 
-HPM installs both the **ratgdo32 Garage Door** app and the required **ratgdo32 Direct HTTP Garage Door** driver. For manual installation, add [ratgdo32-app.groovy](./ratgdo32-app.groovy) under **Apps Code** and [ratgdo32-http.groovy](./ratgdo32-http.groovy) under **Drivers Code**.
+HPM installs both the **ratgdo32 Garage Door** app and the required **ratgdo32 Direct HTTP Garage Door** driver. For manual installation, add [apps/ratgdo32-Garage-Door-App.groovy](./apps/ratgdo32-Garage-Door-App.groovy) under **Apps Code** and [drivers/ratgdo32-Garage-Door.groovy](./drivers/ratgdo32-Garage-Door.groovy) under **Drivers Code**.
 
 ### 3. Add your garage door
 

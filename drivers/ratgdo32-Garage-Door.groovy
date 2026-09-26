@@ -1,12 +1,13 @@
-/** Direct local HTTP/SSE driver for current ratgdo/homekit-ratgdo32 firmware. */
-import groovy.transform.Field
-import java.security.MessageDigest
-
-@Field static final String DRIVER_VERSION = "0.1.2"
-
+/**
+ *  ratgdo32 Direct HTTP Garage Door
+ *
+ *  Direct local HTTP/SSE driver for current ratgdo/homekit-ratgdo32 firmware.
+ *  Connection settings are pushed by the parent "ratgdo32 Garage Door" app, or
+ *  can be entered manually in the device preferences.
+ */
 metadata {
     definition(name: "ratgdo32 Direct HTTP Garage Door", namespace: "babgvant", author: "Andrew Van Til",
-            importUrl: "https://raw.githubusercontent.com/babgvant/hubitat-ratgdo32/main/ratgdo32-http.groovy") {
+            importUrl: "https://raw.githubusercontent.com/babgvant/hubitat-ratgdo32/main/drivers/ratgdo32-Garage-Door.groovy") {
         capability "GarageDoorControl"
         capability "ContactSensor"
         capability "Refresh"
@@ -40,9 +41,11 @@ metadata {
     }
 }
 
-void installed() { initializeAttributes(); log.info "${device.displayName}: installed driver ${DRIVER_VERSION}" }
+private String driverVersion() { "0.3.0" }
 
-void updated() {
+def installed() { initializeAttributes(); log.info "${device.displayName}: installed driver ${driverVersion()}" }
+
+def updated() {
     logInfo "preferences updated"
     unschedule()
     closeEventStream()
@@ -52,9 +55,18 @@ void updated() {
     runIn(1, "initialize", [overwrite: true])
 }
 
-void configure() { initialize() }
+def configure() { initialize() }
 
-void initialize() { connectDevice(true) }
+/** Called by the parent "ratgdo32 Garage Door" app to push connection settings. */
+def applyConnection(String host, Integer port, String username, String password) {
+    device.updateSetting("ipAddress", [value: host, type: "text"])
+    device.updateSetting("httpPort", [value: port, type: "number"])
+    device.updateSetting("httpUsername", [value: username ?: "", type: "text"])
+    device.updateSetting("httpPassword", [value: password ?: "", type: "password"])
+    runIn(1, "initialize", [overwrite: true])
+}
+
+def initialize() { connectDevice(true) }
 
 private void connectDevice(Boolean cancelReconnect) {
     initializeAttributes()
@@ -68,9 +80,9 @@ private void connectDevice(Boolean cancelReconnect) {
     scheduleHealthCheck()
 }
 
-void uninstalled() { unschedule(); closeEventStream() }
+def uninstalled() { unschedule(); closeEventStream() }
 
-void refresh() {
+def refresh() {
     if (!configurationValid()) return
     Map params = [uri: baseUri(), path: "/status.json", contentType: "application/json", timeout: 8]
     logTrace "HTTP GET ${baseUri()}/status.json"
@@ -78,11 +90,11 @@ void refresh() {
     catch (Exception e) { communicationFailure("status request failed", e) }
 }
 
-void ping() { refresh() }
-void open() { issueMovementCommand("open") }
-void close() { issueMovementCommand("close") }
+def ping() { refresh() }
+def open() { issueMovementCommand("open") }
+def close() { issueMovementCommand("close") }
 
-void statusCallback(response, Map data) {
+def statusCallback(response, Map data) {
     Integer status = response?.status as Integer
     if (status != 200) { handleHttpError("status", status); return }
     try {
@@ -93,7 +105,7 @@ void statusCallback(response, Map data) {
     } catch (Exception e) { log.warn "${device.displayName}: invalid /status.json response ignored: ${e.message}" }
 }
 
-void commandCallback(response, Map data) {
+def commandCallback(response, Map data) {
     Integer status = response?.status as Integer
     if (status in [200, 204]) {
         if (data?.authenticated) emit("authenticationStatus", "ready")
@@ -111,7 +123,7 @@ void commandCallback(response, Map data) {
     } else handleHttpError("command", status)
 }
 
-void digestProbeCallback(response, Map data) {
+def digestProbeCallback(response, Map data) {
     state.digestProbePending = false
     Integer status = response?.status as Integer
     if (status == 401) {
@@ -129,7 +141,7 @@ void digestProbeCallback(response, Map data) {
     }
 }
 
-void subscriptionCallback(response, Map data) {
+def subscriptionCallback(response, Map data) {
     Integer status = response?.status as Integer
     if (status != 200) { handleHttpError("event subscription", status); scheduleReconnect(); return }
     String path = response.data?.toString()?.trim()
@@ -145,14 +157,14 @@ void subscriptionCallback(response, Map data) {
     } catch (Exception e) { communicationFailure("event-stream connection failed", e); scheduleReconnect() }
 }
 
-void parse(String message) {
+def parse(String message) {
     if (!message?.trim()) return
     logTrace "SSE <= ${message}"
     try { handleStatus(parseJson(message) as Map, true) }
     catch (Exception e) { log.warn "${device.displayName}: malformed SSE message ignored: ${e.message}" }
 }
 
-void eventStreamStatus(String message) {
+def eventStreamStatus(String message) {
     logDebug "event stream status: ${message}"
     if (message?.startsWith("START:")) {
         state.reconnectAttempt = 0
@@ -164,7 +176,7 @@ void eventStreamStatus(String message) {
     }
 }
 
-void healthCheck() {
+def healthCheck() {
     Long lastSeen = state.lastSeenEpoch as Long
     Long staleMs = asInteger(settings.staleMinutes, 5) * 60L * 1000L
     if (!lastSeen || now() - lastSeen > staleMs) {
@@ -174,8 +186,8 @@ void healthCheck() {
     }
 }
 
-void reconnect() { connectDevice(false) }
-void pollPosition() { if (device.currentValue("motion") in ["opening", "closing"]) refresh() }
+def reconnect() { connectDevice(false) }
+def pollPosition() { if (device.currentValue("motion") in ["opening", "closing"]) refresh() }
 
 private void requestEventSubscription() {
     Map params = [uri: baseUri(), path: "/rest/events/subscribe",
@@ -231,7 +243,7 @@ private void handleStatus(Map update, Boolean fromEventStream) {
     if (!update) return
     noteSeen()
     if (update.containsKey("passwordRequired")) {
-        Boolean required = asBoolean(update.passwordRequired)
+        Boolean required = toBool(update.passwordRequired)
         emit("authenticationRequired", required ? "yes" : "no")
         if (required) {
             if (!credentialsConfigured()) emit("authenticationStatus", "credentialsMissing")
@@ -243,11 +255,11 @@ private void handleStatus(Map update, Boolean fromEventStream) {
     }
     if (update.firmwareVersion != null) emit("firmwareVersion", update.firmwareVersion.toString())
     if (update.wifiRSSI != null) emit("wifiSignal", update.wifiRSSI.toString())
-    if (update.containsKey("garageObstructed")) emit("obstruction", asBoolean(update.garageObstructed) ? "detected" : "clear")
+    if (update.containsKey("garageObstructed")) emit("obstruction", toBool(update.garageObstructed) ? "detected" : "clear")
 
     String reportedDoor = update.garageDoorState?.toString()?.toLowerCase()
     BigDecimal rawSteps = update.containsKey("encSteps") ? asNumber(update.encSteps) : null
-    Boolean encoderEnabled = update.containsKey("encoderEnabled") ? asBoolean(update.encoderEnabled) : null
+    Boolean encoderEnabled = update.containsKey("encoderEnabled") ? toBool(update.encoderEnabled) : null
     if (encoderEnabled == false) emit("encoderStatus", "disabled")
     else if (encoderEnabled == true && device.currentValue("encoderStatus") in [null, "disabled", "unknown"]) emit("encoderStatus", endpointsCalibrated() ? "calibrated" : "learning")
 
@@ -385,19 +397,19 @@ private String buildDigestAuthorization(String method, String requestUri) {
     "Digest ${parts.join(', ')}"
 }
 
-private static Map<String, String> parseDigestChallenge(String value) {
+private Map<String, String> parseDigestChallenge(String value) {
     Map<String, String> result = [:]
     def matcher = value =~ /([A-Za-z0-9_-]+)\s*=\s*(?:"([^"]*)"|([^,\s]+))/
     matcher.each { match -> result[match[1].toString().toLowerCase()] = (match[2] ?: match[3])?.toString() }
     result
 }
 
-private static String selectDigestQop(Object offered) {
+private String selectDigestQop(Object offered) {
     if (!offered) return null
     offered.toString().split(',').collect { it.trim().toLowerCase() }.find { it == "auth" }
 }
 
-private static String responseHeader(response, String wantedName) {
+private String responseHeader(response, String wantedName) {
     Map headers = response?.headers as Map
     def entry = headers?.find { key, ignored -> key?.toString()?.equalsIgnoreCase(wantedName) }
     Object value = entry?.value
@@ -405,11 +417,11 @@ private static String responseHeader(response, String wantedName) {
     value?.toString()
 }
 
-private static String md5Hex(String value) {
-    MessageDigest.getInstance("MD5").digest(value.getBytes("UTF-8")).encodeHex().toString()
+private String md5Hex(String value) {
+    java.security.MessageDigest.getInstance("MD5").digest(value.getBytes("UTF-8")).encodeHex().toString()
 }
 
-private static String escapeDigest(String value) { value.replace("\\", "\\\\").replace("\"", "\\\"") }
+private String escapeDigest(String value) { value.replace("\\", "\\\\").replace("\"", "\\\"") }
 
 private Boolean credentialsConfigured() {
     settings.httpUsername?.toString()?.trim() && settings.httpPassword != null && settings.httpPassword.toString().length() > 0
@@ -467,7 +479,7 @@ private Boolean configurationValid() {
 }
 
 private void initializeAttributes() {
-    emit("driverVersion", DRIVER_VERSION)
+    emit("driverVersion", driverVersion())
     if (device.currentValue("door") == null) emit("door", "unknown")
     if (device.currentValue("contact") == null) emit("contact", "open")
     if (device.currentValue("motion") == null) emit("motion", "unknown")
@@ -479,7 +491,7 @@ private void initializeAttributes() {
     if (device.currentValue("authenticationStatus") == null) emit("authenticationStatus", "unknown")
 }
 
-void disableVerboseLogging() {
+def disableVerboseLogging() {
     if (settings.debugLogging || settings.traceLogging) log.warn "${device.displayName}: verbose logging disabled automatically"
     device.updateSetting("debugLogging", [value: "false", type: "bool"])
     device.updateSetting("traceLogging", [value: "false", type: "bool"])
@@ -492,10 +504,10 @@ private void emit(String name, Object value, String unit = null) {
     sendEvent(event)
 }
 
-private static Boolean asBoolean(Object value) { value instanceof Boolean ? value : (value?.toString()?.toLowerCase() in ["true", "1", "yes", "on"]) }
-private static Integer asInteger(Object value, Integer fallback) { try { value?.toString()?.toInteger() ?: fallback } catch (ignored) { fallback } }
-private static BigDecimal asNumber(Object value) { try { value == null ? null : new BigDecimal(value.toString()) } catch (ignored) { null } }
-private static String urlEncode(String value) { java.net.URLEncoder.encode(value, "UTF-8") }
+private Boolean toBool(Object value) { value instanceof Boolean ? value : (value?.toString()?.toLowerCase() in ["true", "1", "yes", "on"]) }
+private Integer asInteger(Object value, Integer fallback) { try { value?.toString()?.toInteger() ?: fallback } catch (ignored) { fallback } }
+private BigDecimal asNumber(Object value) { try { value == null ? null : new BigDecimal(value.toString()) } catch (ignored) { null } }
+private String urlEncode(String value) { java.net.URLEncoder.encode(value, "UTF-8") }
 private void logInfo(String message) { if (settings.infoLogging != false) log.info "${device.displayName}: ${message}" }
 private void logDebug(String message) { if (settings.debugLogging) log.debug "${device.displayName}: ${message}" }
 private void logTrace(String message) { if (settings.traceLogging) log.trace "${device.displayName}: ${message}" }
