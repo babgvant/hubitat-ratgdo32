@@ -22,7 +22,7 @@ These paths and payloads were verified against current firmware source at v3.5.2
 
 The firmware supports ratgdo32 hardware, dry-contact openers, the optional rotary encoder, obstruction reporting, and locally generated open/close state. In encoder mode it reports `Open`, `Closed`, `Opening`, `Closing`, `Stopped`, or `Unknown` through HTTP.
 
-`status.json` exposes raw encoder steps but not normalized position or the firmware's learned endpoints. The driver learns raw closed/open endpoints whenever authoritative endpoint states are observed, persists them in Hubitat state, and derives 0–100%. While moving, it polls `status.json` at a configurable low rate because live SSE messages do not include `encSteps`.
+`status.json` exposes the firmware's calibrated position as `encDoorPosition` (0–100) plus raw encoder steps. The driver publishes `encDoorPosition` as `position`. While moving, it polls `status.json` at a configurable low rate in case live SSE messages omit position.
 
 ## Hubitat model
 
@@ -35,7 +35,7 @@ Standard capabilities:
 - `Initialize`
 - `HealthCheck`
 
-Custom attributes include position, movement, obstruction, controller/stream status, last seen, raw encoder position, encoder calibration status, firmware version, Wi-Fi signal, and authentication status.
+Custom attributes include position, movement, obstruction, controller/stream status, last seen, raw encoder position, encoder status, firmware version, Wi-Fi signal, and authentication status.
 
 A stationary partial door is represented as:
 
@@ -97,15 +97,9 @@ If an app-created device has no current states or its **Preferences** tab has a 
 
 ## Encoder calibration
 
-The firmware calibrates its encoder after complete travel to both endpoints. The driver separately learns the raw step reported at each authoritative endpoint so it can calculate percentage.
+The firmware calibrates its encoder after complete travel to both endpoints and reports the result as `encDoorPosition` (0–100). The driver publishes that value as `position`; it does no calibration of its own. `encoderStatus` is `enabled` or `disabled`, mirroring the firmware's `encoderEnabled` setting.
 
-After installation or firmware encoder reset:
-
-1. Move fully closed and allow the door to stop.
-2. Move fully open and allow it to stop.
-3. Verify `encoderStatus=calibrated` and position changes in the correct direction.
-
-If the encoder direction changes, repeat both endpoint cycles. Newly observed endpoint values replace the prior values.
+If the encoder direction changes or the firmware calibration is reset, cycle the door fully closed and open so the firmware relearns its endpoints.
 
 ## Test plan
 
@@ -128,7 +122,6 @@ Perform motion tests while physically observing the door.
 ## Known limitations
 
 - HTTP Digest authenticates commands but does not encrypt traffic. Status/SSE telemetry remains readable to clients that can reach the device; use network isolation as defense in depth.
-- Percentage is derived in Hubitat because current firmware exposes raw steps but not encoder endpoints or normalized position through HTTP.
 - SSE omits raw encoder steps, so `status.json` is polled while moving. Door and obstruction state remain event-driven.
 - The firmware HTTP API is not separately versioned as a formal public API. Regression-test firmware updates.
 - Dry-contact mode does not provide Genie opener light control. The driver does not expose a misleading Switch capability.
@@ -140,7 +133,8 @@ Perform motion tests while physically observing the door.
 |---|---|---|
 | `garageDoorState` | string | Door and motion state |
 | `garageObstructed` | boolean | Obstruction state |
-| `encSteps` | integer | Raw and derived position |
+| `encSteps` | integer | Raw encoder position |
+| `encDoorPosition` | integer | Position percentage (0–100) |
 | `encoderEnabled` | boolean | Encoder status |
 | `encoderReversed` | boolean | Diagnostic context |
 | `firmwareVersion` | string | Firmware diagnostic |

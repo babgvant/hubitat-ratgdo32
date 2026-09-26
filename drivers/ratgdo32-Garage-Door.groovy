@@ -21,7 +21,7 @@ metadata {
         attribute "streamStatus", "enum", ["connecting", "connected", "disconnected"]
         attribute "lastSeen", "string"
         attribute "rawEncoderPosition", "number"
-        attribute "encoderStatus", "enum", ["disabled", "learning", "calibrated", "unknown"]
+        attribute "encoderStatus", "enum", ["enabled", "disabled", "unknown"]
         attribute "firmwareVersion", "string"
         attribute "wifiSignal", "string"
         attribute "authenticationRequired", "enum", ["yes", "no", "unknown"]
@@ -41,7 +41,7 @@ metadata {
     }
 }
 
-private String driverVersion() { "0.3.0" }
+private String driverVersion() { "0.3.1" }
 
 def installed() { initializeAttributes(); log.info "${device.displayName}: installed driver ${driverVersion()}" }
 
@@ -70,6 +70,7 @@ def initialize() { connectDevice(true) }
 
 private void connectDevice(Boolean cancelReconnect) {
     initializeAttributes()
+    ["encoderClosedSteps", "encoderOpenSteps", "rawEncoderPosition"].each { state.remove(it) }
     if (cancelReconnect) unschedule("reconnect")
     unschedule("pollPosition")
     if (!configurationValid()) return
@@ -200,7 +201,7 @@ private void requestEventSubscription() {
 private void issueMovementCommand(String command) {
     String door = device.currentValue("door")?.toString()
     String motion = device.currentValue("motion")?.toString()
-    Boolean partialStopped = door == "unknown" && motion == "stopped" && asNumber(device.currentValue("rawEncoderPosition")) != null
+    Boolean partialStopped = door == "unknown" && motion == "stopped" && asNumber(device.currentValue("position")) != null
     if (device.currentValue("controllerStatus") != "online") { log.warn "${device.displayName}: rejected ${command}; controller is offline"; return }
     String authRequired = device.currentValue("authenticationRequired")?.toString()
     if (authRequired == "yes" && device.currentValue("authenticationStatus") != "ready") {
@@ -259,20 +260,17 @@ private void handleStatus(Map update, Boolean fromEventStream) {
 
     String reportedDoor = update.garageDoorState?.toString()?.toLowerCase()
     BigDecimal rawSteps = update.containsKey("encSteps") ? asNumber(update.encSteps) : null
+    BigDecimal firmwarePosition = update.containsKey("encDoorPosition") ? asNumber(update.encDoorPosition) : null
     Boolean encoderEnabled = update.containsKey("encoderEnabled") ? toBool(update.encoderEnabled) : null
     if (encoderEnabled == false) emit("encoderStatus", "disabled")
-    else if (encoderEnabled == true && device.currentValue("encoderStatus") in [null, "disabled", "unknown"]) emit("encoderStatus", endpointsCalibrated() ? "calibrated" : "learning")
+    else if (encoderEnabled == true) emit("encoderStatus", "enabled")
 
-    if (rawSteps != null) {
-        state.rawEncoderPosition = rawSteps.toPlainString()
-        emit("rawEncoderPosition", rawSteps.stripTrailingZeros().toPlainString())
-        learnEndpoint(reportedDoor ?: state.reportedDoor?.toString(), rawSteps)
-        publishPosition(rawSteps, reportedDoor ?: state.reportedDoor?.toString())
-    }
+    if (rawSteps != null) emit("rawEncoderPosition", rawSteps.stripTrailingZeros().toPlainString())
+    if (firmwarePosition != null) publishPosition(firmwarePosition, reportedDoor ?: state.reportedDoor?.toString())
     if (reportedDoor != null) {
         parseDoorState(reportedDoor)
         if (reportedDoor in ["opening", "closing"]) schedulePositionPoll()
-        else if (fromEventStream && rawSteps == null) runIn(1, "refresh", [overwrite: true])
+        else if (fromEventStream && firmwarePosition == null) runIn(1, "refresh", [overwrite: true])
     }
 }
 
@@ -288,26 +286,11 @@ private void parseDoorState(String reported) {
     }
 }
 
-private void learnEndpoint(String reported, BigDecimal raw) {
-    if (reported == "closed") state.encoderClosedSteps = raw.toPlainString()
-    else if (reported == "open") state.encoderOpenSteps = raw.toPlainString()
-    if (endpointsCalibrated()) emit("encoderStatus", "calibrated")
-    else if (device.currentValue("encoderStatus") != "disabled") emit("encoderStatus", "learning")
-}
-
-private void publishPosition(BigDecimal raw, String reported) {
+private void publishPosition(BigDecimal position, String reported) {
     if (reported == "closed") { emit("position", 0, "%"); return }
     if (reported == "open") { emit("position", 100, "%"); return }
-    BigDecimal closed = asNumber(state.encoderClosedSteps), open = asNumber(state.encoderOpenSteps)
-    if (closed == null || open == null || open == closed) return
-    BigDecimal calculated = ((raw - closed) * 100G) / (open - closed)
-    Integer rounded = Math.max(0, Math.min(100, calculated.setScale(0, BigDecimal.ROUND_HALF_UP).intValue()))
+    Integer rounded = Math.max(0, Math.min(100, position.setScale(0, BigDecimal.ROUND_HALF_UP).intValue()))
     emit("position", rounded, "%")
-}
-
-private Boolean endpointsCalibrated() {
-    BigDecimal closed = asNumber(state.encoderClosedSteps), open = asNumber(state.encoderOpenSteps)
-    closed != null && open != null && closed != open
 }
 
 private void schedulePositionPoll() { runIn(asInteger(settings.positionPollSeconds, 2), "pollPosition", [overwrite: true]) }

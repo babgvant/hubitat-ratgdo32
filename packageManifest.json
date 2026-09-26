@@ -1,13 +1,13 @@
 {
   "packageName": "ratgdo32 Direct HTTP Garage Door",
   "author": "Andrew Van Til",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "minimumHEVersion": "2.3.6",
   "dateReleased": "2026-09-25",
   "gitHubUrl": "https://github.com/babgvant/hubitat-ratgdo32",
   "documentationLink": "https://github.com/babgvant/hubitat-ratgdo32/blob/main/README.md",
   "communityLink": "https://github.com/babgvant/hubitat-ratgdo32/issues",
-  "releaseNotes": "Restructures the package into apps/ and drivers/ folders, simplifies the driver for Hubitat compatibility, and has the app push connection settings through a driver command.",
+  "releaseNotes": "Uses the firmware's encDoorPosition for position instead of learning endpoints in the driver. Restructures the package into apps/ and drivers/ folders, simplifies the driver for Hubitat compatibility, and has the app push connection settings through a driver command.",
   "apps": [
     {
       "id": "1b847899-bcea-48fc-8f79-187146b963b9",
