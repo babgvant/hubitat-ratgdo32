@@ -2,7 +2,7 @@
 import groovy.transform.Field
 import java.security.MessageDigest
 
-@Field static final String DRIVER_VERSION = "0.1.1"
+@Field static final String DRIVER_VERSION = "0.1.2"
 
 metadata {
     definition(name: "ratgdo32 Direct HTTP Garage Door", namespace: "babgvant", author: "Andrew Van Til",
