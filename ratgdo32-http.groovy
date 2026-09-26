@@ -54,9 +54,11 @@ void updated() {
 
 void configure() { initialize() }
 
-void initialize() {
+void initialize() { connectDevice(true) }
+
+private void connectDevice(Boolean cancelReconnect) {
     initializeAttributes()
-    unschedule("reconnect")
+    if (cancelReconnect) unschedule("reconnect")
     unschedule("pollPosition")
     if (!configurationValid()) return
     closeEventStream()
@@ -172,7 +174,7 @@ void healthCheck() {
     }
 }
 
-void reconnect() { initialize() }
+void reconnect() { connectDevice(false) }
 void pollPosition() { if (device.currentValue("motion") in ["opening", "closing"]) refresh() }
 
 private void requestEventSubscription() {
